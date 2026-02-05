@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Indexer - Поиск по документам</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --danger: #ef4444;
+            --bg: #0f172a;
+            --bg-card: #1e293b;
+            --bg-input: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #475569;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, var(--primary), #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+        
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+        
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin: 1.5rem 0;
+        }
+        
+        .stat {
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--primary);
+        }
+        
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+        
+        @media (max-width: 900px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+        }
+        
+        .card-title {
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        /* Drop Zone */
+        .dropzone {
+            border: 2px dashed var(--border);
+            border-radius: 0.75rem;
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: var(--bg-input);
+        }
+        
+        .dropzone:hover, .dropzone.dragover {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.1);
+        }
+        
+        .dropzone-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+        
+        .dropzone-text {
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+        
+        .dropzone-formats {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+        
+        #fileInput {
+            display: none;
+        }
+        
+        /* File List */
+        .file-list {
+            margin-top: 1rem;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem;
+            background: var(--bg-input);
+            border-radius: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .file-name {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .file-status {
+            font-size: 0.875rem;
+        }
+        
+        .file-status.success { color: var(--success); }
+        .file-status.error { color: var(--danger); }
+        .file-status.pending { color: var(--text-muted); }
+        
+        /* Search */
+        .search-form {
+            display: flex;
+            gap: 0.75rem;
+        }
+        
+        .search-input {
+            flex: 1;
+            padding: 1rem;
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            background: var(--bg-input);
+            color: var(--text);
+            font-size: 1rem;
+        }
+        
+        .search-input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        
+        .btn {
+            padding: 1rem 1.5rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-dark);
+        }
+        
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        /* Results */
+        .results {
+            margin-top: 1.5rem;
+        }
+        
+        .answer-box {
+            background: var(--bg-input);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid var(--primary);
+        }
+        
+        .answer-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+        
+        .answer-text {
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+        
+        .sources {
+            margin-top: 1rem;
+        }
+        
+        .sources-title {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+        
+        .source-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            background: var(--bg);
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            margin-right: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        /* Loading */
+        .loading {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 2rem;
+            color: var(--text-muted);
+        }
+        
+        .loading.active {
+            display: flex;
+        }
+        
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            padding: 1rem 1.5rem;
+            border-radius: 0.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+        
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast.success { border-color: var(--success); }
+        .toast.error { border-color: var(--danger); }
+        
+        /* Actions */
+        .actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔍 RAG Indexer</h1>
+            <p class="subtitle">Загрузите документы и задавайте вопросы</p>
+            
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-value" id="statVectors">0</div>
+                    <div class="stat-label">Векторов</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="statDocs">0</div>
+                    <div class="stat-label">Документов</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="statChunks">0</div>
+                    <div class="stat-label">Чанков</div>
+                </div>
+            </div>
+        </header>
+        
+        <div class="grid">
+            <!-- Upload Section -->
+            <div class="card">
+                <h2 class="card-title">📁 Загрузка документов</h2>
+                
+                <div class="dropzone" id="dropzone">
+                    <div class="dropzone-icon">📄</div>
+                    <div class="dropzone-text">Перетащите файлы сюда или нажмите для выбора</div>
+                    <div class="dropzone-formats">PDF, DOCX, TXT, MD, PY, JS, JSON и другие</div>
+                </div>
+                <input type="file" id="fileInput" multiple accept=".pdf,.docx,.txt,.md,.py,.js,.ts,.java,.cpp,.c,.go,.rs,.json,.yaml,.yml">
+                
+                <div class="file-list" id="fileList"></div>
+                
+                <div class="loading" id="uploadLoading">
+                    <div class="spinner"></div>
+                    <span>Индексация документов...</span>
+                </div>
+                
+                <div class="actions">
+                    <button class="btn btn-danger" id="clearBtn" onclick="clearIndex()">
+                        🗑️ Очистить индекс
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Search Section -->
+            <div class="card">
+                <h2 class="card-title">💬 Поиск и вопросы</h2>
+                
+                <form class="search-form" onsubmit="askQuestion(event)">
+                    <input type="text" class="search-input" id="queryInput" 
+                           placeholder="Задайте вопрос по документам..." required>
+                    <button type="submit" class="btn btn-primary" id="askBtn">
+                        🔍 Спросить
+                    </button>
+                </form>
+                
+                <div class="loading" id="searchLoading">
+                    <div class="spinner"></div>
+                    <span>Генерация ответа...</span>
+                </div>
+                
+                <div class="results" id="results"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="toast" id="toast"></div>
+    
+    <script>
+        // Элементы
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const uploadLoading = document.getElementById('uploadLoading');
+        const searchLoading = document.getElementById('searchLoading');
+        const results = document.getElementById('results');
+        const toast = document.getElementById('toast');
+        
+        // Загрузка статистики
+        async function loadStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                document.getElementById('statVectors').textContent = data.total_vectors;
+                document.getElementById('statDocs').textContent = data.total_documents;
+                document.getElementById('statChunks').textContent = data.total_chunks;
+            } catch (e) {
+                console.error('Ошибка загрузки статистики:', e);
+            }
+        }
+        
+        // Показать уведомление
+        function showToast(message, type = 'info') {
+            toast.textContent = message;
+            toast.className = 'toast show ' + type;
+            setTimeout(() => toast.className = 'toast', 3000);
+        }
+        
+        // Drag & Drop
+        dropzone.addEventListener('click', () => fileInput.click());
+        
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('dragover');
+        });
+        
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.classList.remove('dragover');
+        });
+        
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length) uploadFiles(files);
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) uploadFiles(e.target.files);
+        });
+        
+        // Загрузка файлов
+        async function uploadFiles(files) {
+            fileList.innerHTML = '';
+            uploadLoading.classList.add('active');
+            
+            // Показываем файлы
+            for (const file of files) {
+                const item = document.createElement('div');
+                item.className = 'file-item';
+                item.innerHTML = `
+                    <span class="file-name">📄 ${file.name}</span>
+                    <span class="file-status pending">⏳ Обработка...</span>
+                `;
+                fileList.appendChild(item);
+            }
+            
+            const formData = new FormData();
+            for (const file of files) {
+                formData.append('files', file);
+            }
+            
+            try {
+                const res = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await res.json();
+                
+                if (data.error) {
+                    showToast(data.error, 'error');
+                } else {
+                    // Обновляем статусы
+                    const items = fileList.querySelectorAll('.file-item');
+                    data.files.forEach((file, i) => {
+                        if (items[i]) {
+                            const status = items[i].querySelector('.file-status');
+                            if (file.error) {
+                                status.className = 'file-status error';
+                                status.textContent = '❌ ' + file.error;
+                            } else {
+                                status.className = 'file-status success';
+                                status.textContent = `✅ ${file.chunks} чанков`;
+                            }
+                        }
+                    });
+                    
+                    showToast(`Проиндексировано ${data.indexed_chunks} чанков`, 'success');
+                    loadStats();
+                }
+            } catch (e) {
+                showToast('Ошибка загрузки: ' + e.message, 'error');
+            } finally {
+                uploadLoading.classList.remove('active');
+            }
+        }
+        
+        // Задать вопрос
+        async function askQuestion(e) {
+            e.preventDefault();
+            
+            const query = document.getElementById('queryInput').value.trim();
+            if (!query) return;
+            
+            searchLoading.classList.add('active');
+            results.innerHTML = '';
+            document.getElementById('askBtn').disabled = true;
+            
+            try {
+                const res = await fetch('/api/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, top_k: 3 })
+                });
+                
+                const data = await res.json();
+                
+                if (data.error) {
+                    results.innerHTML = `<div class="answer-box" style="border-color: var(--danger);">
+                        <div class="answer-text">❌ ${data.error}</div>
+                    </div>`;
+                } else {
+                    let sourcesHtml = '';
+                    if (data.sources && data.sources.length) {
+                        sourcesHtml = `<div class="sources">
+                            <div class="sources-title">📚 Источники:</div>
+                            ${data.sources.map(s => `<span class="source-item">📄 ${s.filename}</span>`).join('')}
+                        </div>`;
+                    }
+                    
+                    results.innerHTML = `<div class="answer-box">
+                        <div class="answer-label">💡 Ответ:</div>
+                        <div class="answer-text">${escapeHtml(data.answer)}</div>
+                        ${sourcesHtml}
+                    </div>`;
+                }
+            } catch (e) {
+                results.innerHTML = `<div class="answer-box" style="border-color: var(--danger);">
+                    <div class="answer-text">❌ Ошибка: ${e.message}</div>
+                </div>`;
+            } finally {
+                searchLoading.classList.remove('active');
+                document.getElementById('askBtn').disabled = false;
+            }
+        }
+        
+        // Очистить индекс
+        async function clearIndex() {
+            if (!confirm('Вы уверены? Все документы и индекс будут удалены.')) return;
+            
+            try {
+                const res = await fetch('/api/clear', { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.error) {
+                    showToast(data.error, 'error');
+                } else {
+                    showToast('Индекс очищен', 'success');
+                    fileList.innerHTML = '';
+                    results.innerHTML = '';
+                    loadStats();
+                }
+            } catch (e) {
+                showToast('Ошибка: ' + e.message, 'error');
+            }
+        }
+        
+        // Экранирование HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Инициализация
+        loadStats();
+    </script>
+</body>
+</html>
