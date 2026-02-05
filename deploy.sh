@@ -8,7 +8,7 @@
 #   --install-all       Установить всё (Ollama + зависимости + модели)
 #   --install-ollama    Установить только Ollama
 #   --install-deps      Установить только Python зависимости
-#   --port PORT         Указать порт (по умолчанию 8080)
+#   --port PORT         Указать порт (по умолчанию 8000)
 #   --no-models         Не скачивать модели Ollama
 #   --help              Показать справку
 # =============================================================================
@@ -24,7 +24,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Параметры по умолчанию
-PORT=8080
+PORT=8000
 INSTALL_OLLAMA=false
 INSTALL_DEPS=false
 INSTALL_MODELS=true
@@ -45,7 +45,7 @@ show_help() {
     echo "  --install-all       Установить всё (рекомендуется)"
     echo "  --install-ollama    Установить только Ollama"
     echo "  --install-deps      Установить только Python зависимости"
-    echo "  --port PORT         Указать порт (по умолчанию 8080)"
+    echo "  --port PORT         Указать порт (по умолчанию 8000)"
     echo "  --no-models         Не скачивать модели Ollama"
     echo "  --help              Показать эту справку"
     echo ""

@@ -402,9 +402,9 @@ if __name__ == '__main__':
     print("=" * 60)
     print("🚀 RAG WEB SERVER")
     print("=" * 60)
-    print("📍 URL: http://localhost:8080")
+    print("📍 URL: http://localhost:8000")
     print("📂 Загрузки: uploads/")
     print("🗂️  Индекс: index_data/")
     print("=" * 60)
     
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    app.run(host='0.0.0.0', port=8000, debug=False)

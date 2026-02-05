@@ -71,7 +71,7 @@ chmod +x deploy.sh
 | `--install-all` | Установить всё (Ollama, зависимости, модели) |
 | `--install-ollama` | Установить только Ollama |
 | `--install-deps` | Установить только Python зависимости |
-| `--port PORT` | Указать порт (по умолчанию 8080) |
+| `--port PORT` | Указать порт (по умолчанию 8000) |
 | `--no-models` | Не скачивать модели Ollama |
 
 ### 4. Запуск приложения
@@ -98,7 +98,7 @@ sudo systemctl enable rag-indexer  # автозапуск
 DEEPSEEK_API_KEY=sk-your-key
 
 # Настройки сервера
-RAG_PORT=8080
+RAG_PORT=8000
 RAG_HOST=0.0.0.0
 ```
 
@@ -113,7 +113,7 @@ server {
     client_max_body_size 50M;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -217,7 +217,7 @@ sudo swapon /swapfile
 
 ```bash
 # Найти процесс на порту
-sudo lsof -i :8080
+sudo lsof -i :8000
 
 # Убить процесс
 sudo kill -9 <PID>
@@ -269,7 +269,7 @@ pip install -r requirements.txt
 
 ```bash
 # API статус
-curl http://localhost:8080/api/stats
+curl http://localhost:8000/api/stats
 
 # Ollama статус
 curl http://localhost:11434/api/tags
@@ -280,7 +280,7 @@ curl http://localhost:11434/api/tags
 ```bash
 #!/bin/bash
 # healthcheck.sh
-if curl -s http://localhost:8080/api/stats > /dev/null; then
+if curl -s http://localhost:8000/api/stats > /dev/null; then
     echo "✅ RAG Indexer OK"
 else
     echo "❌ RAG Indexer DOWN"
