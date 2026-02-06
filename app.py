@@ -9,9 +9,11 @@ import json
 import uuid
 import shutil
 import time
+import logging
 from pathlib import Path
 from typing import List, Optional
 from threading import Lock
+from datetime import datetime
 
 from flask import Flask, request, jsonify, render_template, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
@@ -21,6 +23,36 @@ import numpy as np
 from utils.parser import parse_file, get_file_type
 from utils.chunker import chunk_document
 from utils.embedder import OllamaEmbedder
+
+# === НАСТРОЙКА ЛОГИРОВАНИЯ ===
+LOG_FOLDER = "logs"
+Path(LOG_FOLDER).mkdir(parents=True, exist_ok=True)
+
+# Формат логов
+log_format = logging.Formatter(
+    '%(asctime)s | %(levelname)-8s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Логгер приложения
+logger = logging.getLogger('rag_indexer')
+logger.setLevel(logging.DEBUG)
+
+# Файловый обработчик
+file_handler = logging.FileHandler(
+    f'{LOG_FOLDER}/app.log',
+    encoding='utf-8'
+)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(log_format)
+
+# Консольный обработчик
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(log_format)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 # Конфигурация
 UPLOAD_FOLDER = "uploads"
@@ -173,9 +205,15 @@ def create_or_update_index(texts: List[str], sources: List[dict]):
     # Обновляем статус - генерация эмбеддингов
     update_step_status("embedding", "processing", f"Генерация эмбеддингов для {len(texts)} чанков...")
     
+    logger.info(f"🧠 Генерация эмбеддингов для {len(texts)} чанков...")
+    embed_start = time.time()
+    
     # Генерируем эмбеддинги
     embeddings = embedder.embed_texts(texts, show_progress=False)
     embeddings_array = np.array(embeddings).astype(np.float32)
+    
+    embed_time = time.time() - embed_start
+    logger.info(f"⏱️  Эмбеддинги сгенерированы за {embed_time:.2f} сек ({len(texts)/embed_time:.1f} чанков/сек)")
     
     update_step_status("embedding", "completed", f"Сгенерировано {len(texts)} эмбеддингов")
     
@@ -183,10 +221,12 @@ def create_or_update_index(texts: List[str], sources: List[dict]):
     update_step_status("faiss", "processing", "Сохранение в FAISS индекс...")
     
     dimension = embeddings_array.shape[1]
+    logger.debug(f"Размерность эмбеддингов: {dimension}")
     
     # Если индекс не существует - создаём
     if faiss_index is None:
         faiss_index = faiss.IndexFlatL2(dimension)
+        logger.info(f"📦 Создан новый FAISS индекс (dim={dimension})")
     
     # Добавляем новые векторы
     start_id = faiss_index.ntotal
@@ -205,6 +245,7 @@ def create_or_update_index(texts: List[str], sources: List[dict]):
     # Сохраняем
     save_index()
     
+    logger.info(f"💾 Индекс сохранён: {faiss_index.ntotal} векторов")
     update_step_status("faiss", "completed", f"Индекс содержит {faiss_index.ntotal} векторов")
     
     return len(texts)
@@ -245,6 +286,7 @@ def generate_answer(query: str, context_chunks: List[dict]) -> str:
     api_key = os.getenv("DEEPSEEK_API_KEY")
     
     if not api_key:
+        logger.error("DEEPSEEK_API_KEY не найден в .env")
         return "❌ Ошибка: DEEPSEEK_API_KEY не найден в .env"
     
     # Формируем контекст
@@ -253,6 +295,12 @@ def generate_answer(query: str, context_chunks: List[dict]) -> str:
         context_parts.append(f"[{chunk['filename']}]\n{chunk['text']}")
     
     context = "\n\n---\n\n".join(context_parts)
+    
+    # Логируем размер контекста
+    context_chars = len(context)
+    context_words = len(context.split())
+    logger.info(f"📊 Контекст: {len(context_chunks)} чанков, {context_chars} символов, ~{context_words} слов")
+    logger.debug(f"Вопрос: {query[:100]}...")
     
     system_prompt = """Ты — полезный ассистент, который отвечает на вопросы на основе предоставленного контекста.
 Отвечай точно и по делу. Если информации недостаточно, скажи об этом. Отвечай на русском языке."""
@@ -263,6 +311,10 @@ def generate_answer(query: str, context_chunks: List[dict]) -> str:
 ---
 
 Вопрос: {query}"""
+
+    # Оцениваем размер промпта (примерно 4 символа = 1 токен)
+    estimated_tokens = (len(system_prompt) + len(user_prompt)) // 4
+    logger.info(f"📝 Примерный размер промпта: ~{estimated_tokens} токенов")
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -280,6 +332,9 @@ def generate_answer(query: str, context_chunks: List[dict]) -> str:
     }
     
     try:
+        logger.info("🚀 Отправка запроса к DeepSeek API...")
+        start_time = time.time()
+        
         response = requests.post(
             "https://api.deepseek.com/v1/chat/completions",
             headers=headers,
@@ -287,23 +342,46 @@ def generate_answer(query: str, context_chunks: List[dict]) -> str:
             timeout=120  # Увеличен таймаут до 120 секунд
         )
         
+        elapsed_time = time.time() - start_time
+        logger.info(f"⏱️  Время ответа DeepSeek API: {elapsed_time:.2f} сек")
+        
         if response.status_code == 401:
+            logger.error("Неверный API ключ DeepSeek")
             return "❌ Ошибка: Неверный API ключ DeepSeek"
         
         if response.status_code == 429:
+            logger.error("Превышен лимит запросов DeepSeek API")
             return "❌ Ошибка: Превышен лимит запросов DeepSeek API"
         
         response.raise_for_status()
         data = response.json()
-        return data["choices"][0]["message"]["content"]
         
-    except requests.exceptions.ConnectionError:
+        # Логируем использование токенов
+        if 'usage' in data:
+            usage = data['usage']
+            logger.info(f"📈 Токены: prompt={usage.get('prompt_tokens', '?')}, "
+                       f"completion={usage.get('completion_tokens', '?')}, "
+                       f"total={usage.get('total_tokens', '?')}")
+        
+        answer = data["choices"][0]["message"]["content"]
+        logger.info(f"✅ Ответ получен: {len(answer)} символов")
+        logger.debug(f"Ответ: {answer[:200]}...")
+        
+        return answer
+        
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"Ошибка подключения к DeepSeek API: {e}")
         return "❌ Ошибка: Не удалось подключиться к DeepSeek API"
     except requests.exceptions.Timeout:
+        elapsed_time = time.time() - start_time
+        logger.error(f"❌ ТАЙМАУТ DeepSeek API после {elapsed_time:.2f} сек! "
+                    f"Контекст: {context_chars} символов, ~{estimated_tokens} токенов")
         return "❌ Превышено время ожидания ответа от модели. Попробуйте упростить запрос."
     except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP ошибка: {e.response.status_code} - {e.response.text}")
         return f"❌ Ошибка HTTP: {e.response.status_code} - {e.response.text}"
     except Exception as e:
+        logger.exception(f"Неожиданная ошибка генерации: {e}")
         return f"❌ Ошибка генерации: {str(e)}"
 
 
@@ -496,11 +574,19 @@ def ask():
     query = data['query']
     top_k = data.get('top_k', 3)
     
+    logger.info("=" * 50)
+    logger.info(f"🔍 Новый RAG-запрос: '{query[:80]}...' (top_k={top_k})")
+    request_start = time.time()
+    
     try:
         # Поиск релевантных чанков
+        search_start = time.time()
         results = search_index(query, top_k)
+        search_time = time.time() - search_start
+        logger.info(f"⏱️  Поиск в FAISS: {search_time:.3f} сек, найдено {len(results)} чанков")
         
         if not results:
+            logger.warning("Релевантные документы не найдены")
             return jsonify({
                 "success": True,
                 "query": query,
@@ -508,20 +594,34 @@ def ask():
                 "sources": []
             })
         
+        # Логируем найденные источники
+        for i, r in enumerate(results):
+            logger.debug(f"  [{i+1}] {r['filename']} (distance: {r['distance']:.4f})")
+        
         # Генерация ответа
+        generation_start = time.time()
         answer = generate_answer(query, results)
+        generation_time = time.time() - generation_start
+        
+        total_time = time.time() - request_start
+        logger.info(f"⏱️  Общее время запроса: {total_time:.2f} сек "
+                   f"(поиск: {search_time:.3f}с, генерация: {generation_time:.2f}с)")
         
         # Проверяем, содержит ли ответ ошибку таймаута
         if "Превышено время ожидания" in answer:
+            logger.error(f"❌ Таймаут после {total_time:.2f} сек")
             return jsonify({
                 "error": "Превышено время ожидания ответа от модели. Попробуйте упростить запрос."
             }), 504
         
         # Проверяем другие ошибки
         if answer.startswith("❌"):
+            logger.error(f"Ошибка генерации: {answer}")
             return jsonify({
                 "error": answer.replace("❌ ", "")
             }), 500
+        
+        logger.info(f"✅ Запрос успешно обработан за {total_time:.2f} сек")
         
         return jsonify({
             "success": True,
@@ -531,10 +631,13 @@ def ask():
         })
         
     except requests.exceptions.Timeout:
+        total_time = time.time() - request_start
+        logger.error(f"❌ Таймаут запроса после {total_time:.2f} сек")
         return jsonify({
             "error": "Превышено время ожидания ответа от модели. Попробуйте упростить запрос."
         }), 504
     except Exception as e:
+        logger.exception(f"Неожиданная ошибка в /api/ask: {e}")
         return jsonify({"error": f"Ошибка генерации: {str(e)}"}), 500
 
 
@@ -588,12 +691,22 @@ if __name__ == '__main__':
     # Загружаем существующий индекс
     load_index()
     
+    logger.info("=" * 60)
+    logger.info("🚀 RAG WEB SERVER ЗАПУЩЕН")
+    logger.info("=" * 60)
+    logger.info(f"📍 URL: http://localhost:8001")
+    logger.info(f"📂 Загрузки: {UPLOAD_FOLDER}/")
+    logger.info(f"🗂️  Индекс: {INDEX_FOLDER}/")
+    logger.info(f"📋 Логи: {LOG_FOLDER}/app.log")
+    logger.info("=" * 60)
+    
     print("=" * 60)
     print("🚀 RAG WEB SERVER")
     print("=" * 60)
     print("📍 URL: http://localhost:8001")
     print("📂 Загрузки: uploads/")
     print("🗂️  Индекс: index_data/")
+    print(f"📋 Логи: {LOG_FOLDER}/app.log")
     print("=" * 60)
     
     app.run(host='0.0.0.0', port=8001, debug=False)

@@ -43,6 +43,7 @@ metadata.json
 
 # Логи
 *.log
+logs/
 
 # OS
 .DS_Store
