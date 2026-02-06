@@ -8,10 +8,12 @@ import os
 import json
 import uuid
 import shutil
+import time
 from pathlib import Path
 from typing import List, Optional
+from threading import Lock
 
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import numpy as np
@@ -34,6 +36,65 @@ CORS(app)
 faiss_index = None
 metadata = []
 embedder = None
+
+# === ПРОГРЕСС ИНДЕКСАЦИИ ===
+# Этапы: documents, parsing, chunking, embedding, faiss
+# Статусы: pending, processing, completed, error
+indexing_status = {
+    "active": False,
+    "steps": {
+        "documents": {"status": "pending", "message": ""},
+        "parsing": {"status": "pending", "message": ""},
+        "chunking": {"status": "pending", "message": ""},
+        "embedding": {"status": "pending", "message": ""},
+        "faiss": {"status": "pending", "message": ""}
+    },
+    "error": None,
+    "current_file": "",
+    "total_files": 0,
+    "processed_files": 0
+}
+indexing_lock = Lock()
+
+
+def reset_indexing_status():
+    """Сброс статуса индексации."""
+    global indexing_status
+    with indexing_lock:
+        indexing_status = {
+            "active": False,
+            "steps": {
+                "documents": {"status": "pending", "message": ""},
+                "parsing": {"status": "pending", "message": ""},
+                "chunking": {"status": "pending", "message": ""},
+                "embedding": {"status": "pending", "message": ""},
+                "faiss": {"status": "pending", "message": ""}
+            },
+            "error": None,
+            "current_file": "",
+            "total_files": 0,
+            "processed_files": 0
+        }
+
+
+def update_step_status(step: str, status: str, message: str = ""):
+    """Обновление статуса этапа."""
+    global indexing_status
+    with indexing_lock:
+        if step in indexing_status["steps"]:
+            indexing_status["steps"][step]["status"] = status
+            indexing_status["steps"][step]["message"] = message
+
+
+def set_indexing_error(error_message: str, failed_step: str = None):
+    """Установка ошибки индексации."""
+    global indexing_status
+    with indexing_lock:
+        indexing_status["error"] = error_message
+        indexing_status["active"] = False
+        if failed_step and failed_step in indexing_status["steps"]:
+            indexing_status["steps"][failed_step]["status"] = "error"
+            indexing_status["steps"][failed_step]["message"] = error_message
 
 
 def allowed_file(filename: str) -> bool:
@@ -109,9 +170,17 @@ def create_or_update_index(texts: List[str], sources: List[dict]):
     
     init_embedder()
     
+    # Обновляем статус - генерация эмбеддингов
+    update_step_status("embedding", "processing", f"Генерация эмбеддингов для {len(texts)} чанков...")
+    
     # Генерируем эмбеддинги
     embeddings = embedder.embed_texts(texts, show_progress=False)
     embeddings_array = np.array(embeddings).astype(np.float32)
+    
+    update_step_status("embedding", "completed", f"Сгенерировано {len(texts)} эмбеддингов")
+    
+    # Обновляем статус - сохранение в FAISS
+    update_step_status("faiss", "processing", "Сохранение в FAISS индекс...")
     
     dimension = embeddings_array.shape[1]
     
@@ -135,6 +204,8 @@ def create_or_update_index(texts: List[str], sources: List[dict]):
     
     # Сохраняем
     save_index()
+    
+    update_step_status("faiss", "completed", f"Индекс содержит {faiss_index.ntotal} векторов")
     
     return len(texts)
 
@@ -166,8 +237,15 @@ def search_index(query: str, top_k: int = 3) -> List[dict]:
 
 
 def generate_answer(query: str, context_chunks: List[dict]) -> str:
-    """Генерация ответа через Ollama."""
+    """Генерация ответа через DeepSeek API."""
     import requests
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    
+    if not api_key:
+        return "❌ Ошибка: DEEPSEEK_API_KEY не найден в .env"
     
     # Формируем контекст
     context_parts = []
@@ -186,28 +264,45 @@ def generate_answer(query: str, context_chunks: List[dict]) -> str:
 
 Вопрос: {query}"""
 
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
     payload = {
-        "model": "llama3.2",
+        "model": "deepseek-chat",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        "stream": False
+        "temperature": 0.7,
+        "max_tokens": 2048
     }
     
     try:
         response = requests.post(
-            "http://localhost:11434/api/chat",
+            "https://api.deepseek.com/v1/chat/completions",
+            headers=headers,
             json=payload,
-            timeout=300
+            timeout=120  # Увеличен таймаут до 120 секунд
         )
+        
+        if response.status_code == 401:
+            return "❌ Ошибка: Неверный API ключ DeepSeek"
+        
+        if response.status_code == 429:
+            return "❌ Ошибка: Превышен лимит запросов DeepSeek API"
+        
         response.raise_for_status()
         data = response.json()
-        return data["message"]["content"]
+        return data["choices"][0]["message"]["content"]
+        
     except requests.exceptions.ConnectionError:
-        return "❌ Ошибка: Ollama не запущена. Запустите: ollama serve"
+        return "❌ Ошибка: Не удалось подключиться к DeepSeek API"
     except requests.exceptions.Timeout:
-        return "❌ Ошибка: Таймаут генерации. Попробуйте ещё раз."
+        return "❌ Превышено время ожидания ответа от модели. Попробуйте упростить запрос."
+    except requests.exceptions.HTTPError as e:
+        return f"❌ Ошибка HTTP: {e.response.status_code} - {e.response.text}"
     except Exception as e:
         return f"❌ Ошибка генерации: {str(e)}"
 
@@ -220,9 +315,40 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/api/progress')
+def progress_stream():
+    """SSE эндпоинт для отслеживания прогресса индексации."""
+    def generate():
+        while True:
+            with indexing_lock:
+                data = json.dumps(indexing_status)
+            yield f"data: {data}\n\n"
+            
+            # Если индексация не активна и нет ошибки, проверяем реже
+            with indexing_lock:
+                is_active = indexing_status["active"]
+            
+            if is_active:
+                time.sleep(0.5)  # Чаще проверяем во время индексации
+            else:
+                time.sleep(2)  # Реже проверяем в режиме ожидания
+    
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
+
 @app.route('/api/upload', methods=['POST'])
 def upload_files():
     """Загрузка и индексация файлов."""
+    global indexing_status
+    
     if 'files' not in request.files:
         return jsonify({"error": "Файлы не найдены"}), 400
     
@@ -230,6 +356,15 @@ def upload_files():
     
     if not files or all(f.filename == '' for f in files):
         return jsonify({"error": "Файлы не выбраны"}), 400
+    
+    # Сбрасываем и активируем статус индексации
+    reset_indexing_status()
+    with indexing_lock:
+        indexing_status["active"] = True
+        indexing_status["total_files"] = len([f for f in files if f and f.filename and allowed_file(f.filename)])
+    
+    # Этап 1: Документы
+    update_step_status("documents", "processing", f"Получено {len(files)} файлов")
     
     # Создаём папку для загрузок
     upload_path = Path(UPLOAD_FOLDER)
@@ -239,6 +374,11 @@ def upload_files():
     all_chunks = []
     all_sources = []
     
+    update_step_status("documents", "completed", f"Загружено {len(files)} файлов")
+    
+    # Этап 2: Парсинг
+    update_step_status("parsing", "processing", "Извлечение текста из документов...")
+    
     for file in files:
         if file and file.filename and allowed_file(file.filename):
             # Сохраняем файл
@@ -247,9 +387,20 @@ def upload_files():
             filepath = upload_path / unique_name
             file.save(str(filepath))
             
+            with indexing_lock:
+                indexing_status["current_file"] = filename
+            
             try:
                 # Парсим файл
                 text, file_type = parse_file(str(filepath))
+                
+                with indexing_lock:
+                    indexing_status["processed_files"] += 1
+                
+                update_step_status("parsing", "processing", f"Обработан: {filename}")
+                
+                # Этап 3: Чанкинг (обновляется для каждого файла)
+                update_step_status("chunking", "processing", f"Разбиение на чанки: {filename}")
                 
                 # Чанкинг
                 chunks = chunk_document(text, str(filepath), chunk_size=512, chunk_overlap=50)
@@ -273,11 +424,21 @@ def upload_files():
                     "filename": filename,
                     "error": str(e)
                 })
+                set_indexing_error(f"Ошибка при обработке {filename}: {str(e)}", "parsing")
+    
+    update_step_status("parsing", "completed", f"Обработано {len(processed_files)} файлов")
+    update_step_status("chunking", "completed", f"Создано {len(all_chunks)} чанков")
     
     # Индексируем все чанки
     if all_chunks:
         try:
             indexed_count = create_or_update_index(all_chunks, all_sources)
+            
+            # Завершаем индексацию
+            with indexing_lock:
+                indexing_status["active"] = False
+                indexing_status["current_file"] = ""
+            
             return jsonify({
                 "success": True,
                 "files": processed_files,
@@ -285,10 +446,15 @@ def upload_files():
                 "total_vectors": faiss_index.ntotal if faiss_index else 0
             })
         except Exception as e:
+            set_indexing_error(f"Ошибка индексации: {str(e)}", "embedding")
             return jsonify({
                 "error": f"Ошибка индексации: {str(e)}",
                 "files": processed_files
             }), 500
+    
+    # Завершаем без чанков
+    with indexing_lock:
+        indexing_status["active"] = False
     
     return jsonify({
         "success": True,
@@ -345,14 +511,31 @@ def ask():
         # Генерация ответа
         answer = generate_answer(query, results)
         
+        # Проверяем, содержит ли ответ ошибку таймаута
+        if "Превышено время ожидания" in answer:
+            return jsonify({
+                "error": "Превышено время ожидания ответа от модели. Попробуйте упростить запрос."
+            }), 504
+        
+        # Проверяем другие ошибки
+        if answer.startswith("❌"):
+            return jsonify({
+                "error": answer.replace("❌ ", "")
+            }), 500
+        
         return jsonify({
             "success": True,
             "query": query,
             "answer": answer,
             "sources": [{"filename": r["filename"], "distance": r["distance"]} for r in results]
         })
+        
+    except requests.exceptions.Timeout:
+        return jsonify({
+            "error": "Превышено время ожидания ответа от модели. Попробуйте упростить запрос."
+        }), 504
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Ошибка генерации: {str(e)}"}), 500
 
 
 @app.route('/api/stats', methods=['GET'])
@@ -384,12 +567,18 @@ def clear_index():
         if upload_path.exists():
             shutil.rmtree(upload_path)
         
+        # Сбрасываем статус индексации
+        reset_indexing_status()
+        
         return jsonify({"success": True, "message": "Индекс очищен"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
+    # Импортируем requests для использования в ask
+    import requests
+    
     # Создаём необходимые директории
     Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)
     Path(INDEX_FOLDER).mkdir(parents=True, exist_ok=True)

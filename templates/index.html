@@ -10,6 +10,7 @@
             --primary-dark: #4f46e5;
             --success: #10b981;
             --danger: #ef4444;
+            --warning: #f59e0b;
             --bg: #0f172a;
             --bg-card: #1e293b;
             --bg-input: #334155;
@@ -103,6 +104,121 @@
             display: flex;
             align-items: center;
             gap: 0.5rem;
+        }
+        
+        /* Progress Bar */
+        .progress-container {
+            background: var(--bg-input);
+            border-radius: 0.75rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+        
+        .progress-container.active {
+            display: block;
+        }
+        
+        .progress-title {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .progress-steps {
+            display: flex;
+            justify-content: space-between;
+            position: relative;
+        }
+        
+        .progress-steps::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--border);
+            transform: translateY(-50%);
+            z-index: 0;
+        }
+        
+        .progress-step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+            position: relative;
+            z-index: 1;
+            background: var(--bg-input);
+            padding: 0 0.5rem;
+        }
+        
+        .step-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            background: var(--bg-card);
+            border: 2px solid var(--border);
+            transition: all 0.3s;
+        }
+        
+        .step-icon.pending {
+            border-color: var(--border);
+            color: var(--text-muted);
+        }
+        
+        .step-icon.processing {
+            border-color: var(--warning);
+            background: rgba(245, 158, 11, 0.1);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        
+        .step-icon.completed {
+            border-color: var(--success);
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+        }
+        
+        .step-icon.error {
+            border-color: var(--danger);
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+        }
+        
+        .step-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-align: center;
+            max-width: 70px;
+        }
+        
+        .step-status {
+            font-size: 1rem;
+        }
+        
+        .progress-message {
+            margin-top: 0.75rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-align: center;
+            min-height: 1.2em;
+        }
+        
+        .progress-message.error {
+            color: var(--danger);
         }
         
         /* Drop Zone */
@@ -359,6 +475,47 @@
             <div class="card">
                 <h2 class="card-title">📁 Загрузка документов</h2>
                 
+                <!-- Progress Bar -->
+                <div class="progress-container" id="progressContainer">
+                    <div class="progress-title">
+                        <span class="spinner" style="width: 16px; height: 16px;"></span>
+                        <span>Индексация документов...</span>
+                    </div>
+                    <div class="progress-steps">
+                        <div class="progress-step" data-step="documents">
+                            <div class="step-icon pending" id="step-documents">
+                                <span class="step-status">📄</span>
+                            </div>
+                            <span class="step-label">Документы</span>
+                        </div>
+                        <div class="progress-step" data-step="parsing">
+                            <div class="step-icon pending" id="step-parsing">
+                                <span class="step-status">📝</span>
+                            </div>
+                            <span class="step-label">Парсинг</span>
+                        </div>
+                        <div class="progress-step" data-step="chunking">
+                            <div class="step-icon pending" id="step-chunking">
+                                <span class="step-status">✂️</span>
+                            </div>
+                            <span class="step-label">Чанкинг</span>
+                        </div>
+                        <div class="progress-step" data-step="embedding">
+                            <div class="step-icon pending" id="step-embedding">
+                                <span class="step-status">🧠</span>
+                            </div>
+                            <span class="step-label">Эмбеддинги</span>
+                        </div>
+                        <div class="progress-step" data-step="faiss">
+                            <div class="step-icon pending" id="step-faiss">
+                                <span class="step-status">💾</span>
+                            </div>
+                            <span class="step-label">FAISS</span>
+                        </div>
+                    </div>
+                    <div class="progress-message" id="progressMessage"></div>
+                </div>
+                
                 <div class="dropzone" id="dropzone">
                     <div class="dropzone-icon">📄</div>
                     <div class="dropzone-text">Перетащите файлы сюда или нажмите для выбора</div>
@@ -394,7 +551,7 @@
                 
                 <div class="loading" id="searchLoading">
                     <div class="spinner"></div>
-                    <span>Генерация ответа...</span>
+                    <span>Генерация ответа... (до 2 минут)</span>
                 </div>
                 
                 <div class="results" id="results"></div>
@@ -413,6 +570,109 @@
         const searchLoading = document.getElementById('searchLoading');
         const results = document.getElementById('results');
         const toast = document.getElementById('toast');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressMessage = document.getElementById('progressMessage');
+        
+        // SSE для прогресса индексации
+        let progressEventSource = null;
+        
+        function connectProgressSSE() {
+            if (progressEventSource) {
+                progressEventSource.close();
+            }
+            
+            progressEventSource = new EventSource('/api/progress');
+            
+            progressEventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    updateProgressUI(data);
+                } catch (e) {
+                    console.error('Ошибка парсинга SSE:', e);
+                }
+            };
+            
+            progressEventSource.onerror = function(e) {
+                console.log('SSE переподключение...');
+                setTimeout(connectProgressSSE, 3000);
+            };
+        }
+        
+        function updateProgressUI(data) {
+            // Показываем/скрываем прогресс-бар
+            if (data.active) {
+                progressContainer.classList.add('active');
+            }
+            
+            // Обновляем статусы этапов
+            const steps = ['documents', 'parsing', 'chunking', 'embedding', 'faiss'];
+            const statusIcons = {
+                pending: '⏳',
+                processing: '⏳',
+                completed: '✅',
+                error: '❌'
+            };
+            
+            steps.forEach(step => {
+                const stepData = data.steps[step];
+                const stepElement = document.getElementById(`step-${step}`);
+                
+                if (stepElement && stepData) {
+                    // Обновляем класс
+                    stepElement.className = `step-icon ${stepData.status}`;
+                    
+                    // Обновляем иконку статуса
+                    const statusSpan = stepElement.querySelector('.step-status');
+                    if (stepData.status === 'completed') {
+                        statusSpan.textContent = '✅';
+                    } else if (stepData.status === 'error') {
+                        statusSpan.textContent = '❌';
+                    } else if (stepData.status === 'processing') {
+                        // Оставляем оригинальную иконку этапа
+                        const icons = { documents: '📄', parsing: '📝', chunking: '✂️', embedding: '🧠', faiss: '💾' };
+                        statusSpan.textContent = icons[step];
+                    }
+                }
+            });
+            
+            // Обновляем сообщение
+            if (data.error) {
+                progressMessage.textContent = data.error;
+                progressMessage.classList.add('error');
+            } else if (data.current_file) {
+                progressMessage.textContent = `Обработка: ${data.current_file} (${data.processed_files}/${data.total_files})`;
+                progressMessage.classList.remove('error');
+            } else {
+                // Показываем последнее сообщение из активного этапа
+                for (const step of [...steps].reverse()) {
+                    if (data.steps[step].message) {
+                        progressMessage.textContent = data.steps[step].message;
+                        progressMessage.classList.remove('error');
+                        break;
+                    }
+                }
+            }
+            
+            // Скрываем прогресс-бар через 2 секунды после завершения
+            if (!data.active && !data.error) {
+                const allCompleted = steps.every(s => data.steps[s].status === 'completed' || data.steps[s].status === 'pending');
+                if (allCompleted && data.steps.faiss.status === 'completed') {
+                    setTimeout(() => {
+                        progressContainer.classList.remove('active');
+                        // Сбрасываем иконки
+                        steps.forEach(step => {
+                            const stepElement = document.getElementById(`step-${step}`);
+                            if (stepElement) {
+                                stepElement.className = 'step-icon pending';
+                                const icons = { documents: '📄', parsing: '📝', chunking: '✂️', embedding: '🧠', faiss: '💾' };
+                                stepElement.querySelector('.step-status').textContent = icons[step];
+                            }
+                        });
+                        progressMessage.textContent = '';
+                    }, 2000);
+                }
+            }
+        }
         
         // Загрузка статистики
         async function loadStats() {
@@ -461,6 +721,7 @@
         async function uploadFiles(files) {
             fileList.innerHTML = '';
             uploadLoading.classList.add('active');
+            progressContainer.classList.add('active');
             
             // Показываем файлы
             for (const file of files) {
@@ -522,16 +783,23 @@
             if (!query) return;
             
             searchLoading.classList.add('active');
+            searchLoading.querySelector('span').textContent = 'Генерация ответа... (до 2 минут)';
             results.innerHTML = '';
             document.getElementById('askBtn').disabled = true;
+            
+            // Таймаут 3 минуты
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 180000);
             
             try {
                 const res = await fetch('/api/ask', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query, top_k: 3 })
+                    body: JSON.stringify({ query, top_k: 3 }),
+                    signal: controller.signal
                 });
                 
+                clearTimeout(timeoutId);
                 const data = await res.json();
                 
                 if (data.error) {
@@ -554,11 +822,16 @@
                     </div>`;
                 }
             } catch (e) {
+                clearTimeout(timeoutId);
+                const errorMsg = e.name === 'AbortError' 
+                    ? 'Таймаут запроса. LLM не успела ответить.' 
+                    : e.message;
                 results.innerHTML = `<div class="answer-box" style="border-color: var(--danger);">
-                    <div class="answer-text">❌ Ошибка: ${e.message}</div>
+                    <div class="answer-text">❌ Ошибка: ${errorMsg}</div>
                 </div>`;
             } finally {
                 searchLoading.classList.remove('active');
+                searchLoading.querySelector('span').textContent = 'Генерация ответа... (до 2 минут)';
                 document.getElementById('askBtn').disabled = false;
             }
         }
@@ -577,6 +850,7 @@
                     showToast('Индекс очищен', 'success');
                     fileList.innerHTML = '';
                     results.innerHTML = '';
+                    progressContainer.classList.remove('active');
                     loadStats();
                 }
             } catch (e) {
@@ -593,6 +867,7 @@
         
         // Инициализация
         loadStats();
+        connectProgressSSE();
     </script>
 </body>
 </html>
