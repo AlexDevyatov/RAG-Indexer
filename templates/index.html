@@ -221,6 +221,73 @@
             color: var(--danger);
         }
         
+        /* Percentage Progress Bar */
+        .percent-bar-container {
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .percent-bar-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        
+        .percent-bar-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        
+        .percent-bar-value {
+            font-size: 1.25rem;
+            font-weight: bold;
+            color: var(--primary);
+        }
+        
+        .percent-bar {
+            height: 12px;
+            background: var(--bg-card);
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+        
+        .percent-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), #a855f7);
+            border-radius: 6px;
+            transition: width 0.3s ease;
+            position: relative;
+        }
+        
+        .percent-bar-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, 
+                transparent 0%, 
+                rgba(255,255,255,0.2) 50%, 
+                transparent 100%);
+            animation: shimmer 2s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        .percent-bar-fill.complete {
+            background: var(--success);
+        }
+        
+        .percent-bar-fill.complete::after {
+            animation: none;
+        }
+        
         /* Drop Zone */
         .dropzone {
             border: 2px dashed var(--border);
@@ -513,6 +580,18 @@
                             <span class="step-label">FAISS</span>
                         </div>
                     </div>
+                    
+                    <!-- Percentage Bar -->
+                    <div class="percent-bar-container">
+                        <div class="percent-bar-header">
+                            <span class="percent-bar-label">Общий прогресс</span>
+                            <span class="percent-bar-value" id="percentValue">0%</span>
+                        </div>
+                        <div class="percent-bar">
+                            <div class="percent-bar-fill" id="percentBarFill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    
                     <div class="progress-message" id="progressMessage"></div>
                 </div>
                 
@@ -635,6 +714,22 @@
                 }
             });
             
+            // Обновляем процент
+            const percent = data.percent || 0;
+            const percentValue = document.getElementById('percentValue');
+            const percentBarFill = document.getElementById('percentBarFill');
+            
+            if (percentValue && percentBarFill) {
+                percentValue.textContent = `${percent}%`;
+                percentBarFill.style.width = `${percent}%`;
+                
+                if (percent >= 100) {
+                    percentBarFill.classList.add('complete');
+                } else {
+                    percentBarFill.classList.remove('complete');
+                }
+            }
+            
             // Обновляем сообщение
             if (data.error) {
                 progressMessage.textContent = data.error;
@@ -659,7 +754,7 @@
                 if (allCompleted && data.steps.faiss.status === 'completed') {
                     setTimeout(() => {
                         progressContainer.classList.remove('active');
-                        // Сбрасываем иконки
+                        // Сбрасываем иконки и прогресс
                         steps.forEach(step => {
                             const stepElement = document.getElementById(`step-${step}`);
                             if (stepElement) {
@@ -669,6 +764,12 @@
                             }
                         });
                         progressMessage.textContent = '';
+                        // Сбрасываем процентный бар
+                        if (percentValue) percentValue.textContent = '0%';
+                        if (percentBarFill) {
+                            percentBarFill.style.width = '0%';
+                            percentBarFill.classList.remove('complete');
+                        }
                     }, 2000);
                 }
             }

@@ -72,21 +72,53 @@ embedder = None
 # === ПРОГРЕСС ИНДЕКСАЦИИ ===
 # Этапы: documents, parsing, chunking, embedding, faiss
 # Статусы: pending, processing, completed, error
+# Веса этапов для расчёта процентов (в сумме 100)
+STEP_WEIGHTS = {
+    "documents": 5,    # 0-5%
+    "parsing": 20,     # 5-25%
+    "chunking": 15,    # 25-40%
+    "embedding": 50,   # 40-90%
+    "faiss": 10        # 90-100%
+}
+
 indexing_status = {
     "active": False,
     "steps": {
-        "documents": {"status": "pending", "message": ""},
-        "parsing": {"status": "pending", "message": ""},
-        "chunking": {"status": "pending", "message": ""},
-        "embedding": {"status": "pending", "message": ""},
-        "faiss": {"status": "pending", "message": ""}
+        "documents": {"status": "pending", "message": "", "progress": 0},
+        "parsing": {"status": "pending", "message": "", "progress": 0},
+        "chunking": {"status": "pending", "message": "", "progress": 0},
+        "embedding": {"status": "pending", "message": "", "progress": 0},
+        "faiss": {"status": "pending", "message": "", "progress": 0}
     },
     "error": None,
     "current_file": "",
     "total_files": 0,
-    "processed_files": 0
+    "processed_files": 0,
+    "total_chunks": 0,
+    "processed_chunks": 0,
+    "percent": 0
 }
 indexing_lock = Lock()
+
+
+def calculate_percent():
+    """Расчёт общего процента выполнения."""
+    global indexing_status
+    percent = 0
+    steps_order = ["documents", "parsing", "chunking", "embedding", "faiss"]
+    
+    for step in steps_order:
+        step_data = indexing_status["steps"][step]
+        weight = STEP_WEIGHTS[step]
+        
+        if step_data["status"] == "completed":
+            percent += weight
+        elif step_data["status"] == "processing":
+            # Для этапов с прогрессом внутри
+            step_progress = step_data.get("progress", 0)
+            percent += weight * (step_progress / 100)
+    
+    indexing_status["percent"] = min(int(percent), 100)
 
 
 def reset_indexing_status():
@@ -96,26 +128,34 @@ def reset_indexing_status():
         indexing_status = {
             "active": False,
             "steps": {
-                "documents": {"status": "pending", "message": ""},
-                "parsing": {"status": "pending", "message": ""},
-                "chunking": {"status": "pending", "message": ""},
-                "embedding": {"status": "pending", "message": ""},
-                "faiss": {"status": "pending", "message": ""}
+                "documents": {"status": "pending", "message": "", "progress": 0},
+                "parsing": {"status": "pending", "message": "", "progress": 0},
+                "chunking": {"status": "pending", "message": "", "progress": 0},
+                "embedding": {"status": "pending", "message": "", "progress": 0},
+                "faiss": {"status": "pending", "message": "", "progress": 0}
             },
             "error": None,
             "current_file": "",
             "total_files": 0,
-            "processed_files": 0
+            "processed_files": 0,
+            "total_chunks": 0,
+            "processed_chunks": 0,
+            "percent": 0
         }
 
 
-def update_step_status(step: str, status: str, message: str = ""):
+def update_step_status(step: str, status: str, message: str = "", progress: int = 0):
     """Обновление статуса этапа."""
     global indexing_status
     with indexing_lock:
         if step in indexing_status["steps"]:
             indexing_status["steps"][step]["status"] = status
             indexing_status["steps"][step]["message"] = message
+            if status == "completed":
+                indexing_status["steps"][step]["progress"] = 100
+            else:
+                indexing_status["steps"][step]["progress"] = progress
+            calculate_percent()
 
 
 def set_indexing_error(error_message: str, failed_step: str = None):
@@ -474,11 +514,12 @@ def upload_files():
                 
                 with indexing_lock:
                     indexing_status["processed_files"] += 1
+                    parsed_progress = int((indexing_status["processed_files"] / indexing_status["total_files"]) * 100)
                 
-                update_step_status("parsing", "processing", f"Обработан: {filename}")
+                update_step_status("parsing", "processing", f"Обработан: {filename}", parsed_progress)
                 
                 # Этап 3: Чанкинг (обновляется для каждого файла)
-                update_step_status("chunking", "processing", f"Разбиение на чанки: {filename}")
+                update_step_status("chunking", "processing", f"Разбиение на чанки: {filename}", parsed_progress)
                 
                 # Чанкинг
                 chunks = chunk_document(text, str(filepath), chunk_size=512, chunk_overlap=50)
