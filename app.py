@@ -19,6 +19,7 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import numpy as np
+import requests
 
 from utils.parser import parse_file, get_file_type
 from utils.chunker import chunk_document
@@ -319,7 +320,6 @@ def search_index(query: str, top_k: int = 3) -> List[dict]:
 
 def generate_answer(query: str, context_chunks: List[dict]) -> str:
     """Генерация ответа через DeepSeek API."""
-    import requests
     from dotenv import load_dotenv
     
     load_dotenv()
@@ -720,9 +720,6 @@ def clear_index():
 
 
 if __name__ == '__main__':
-    # Импортируем requests для использования в ask
-    import requests
-    
     # Создаём необходимые директории
     Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)
     Path(INDEX_FOLDER).mkdir(parents=True, exist_ok=True)
